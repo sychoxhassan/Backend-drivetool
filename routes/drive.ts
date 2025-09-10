@@ -1,62 +1,29 @@
 import { Router } from "express";
 import { google } from "googleapis";
-import { oauth2Client } from "../utils/googleClient";
+import { getOAuthClient } from "../utils/googleClient";
 
 const router = Router();
 
-// Google login
-router.get("/login", (req, res) => {
-  const scopes = ["https://www.googleapis.com/auth/drive.file"];
-  const url = oauth2Client.generateAuthUrl({
-    access_type: "offline",
-    prompt: "consent",
-    scope: scopes
-  });
-  res.redirect(url);
-});
-
-// Callback after Google login
-router.get("/callback", async (req, res) => {
-  const code = req.query.code as string | undefined;
-  if (!code) return res.status(400).send("Missing code");
-
+router.get("/files", async (req, res) => {
   try {
-    const { tokens } = await oauth2Client.getToken(code);
-    (req.session as any).tokens = tokens;
+    const oauth2Client = getOAuthClient();
 
-    const frontend = process.env.FRONTEND_URL || "http://localhost:3000";
-    return res.redirect(`${frontend}/main.html`);
-  } catch (err) {
-    console.error("OAuth callback error:", err);
-    return res.status(500).send("Authentication error");
-  }
-});
+    // In real case, tokens should be stored in DB / session
+    if (!req.query.access_token) {
+      return res.status(400).json({ error: "Access token required" });
+    }
 
-// Submit a link -> create text file in Drive
-router.post("/submit", async (req, res) => {
-  const tokens = (req.session as any).tokens;
-  if (!tokens) return res.status(401).json({ success: false, message: "Not logged in" });
+    oauth2Client.setCredentials({ access_token: req.query.access_token as string });
 
-  const link = req.body.link as string | undefined;
-  if (!link) return res.status(400).json({ success: false, message: "Missing link" });
-
-  try {
-    oauth2Client.setCredentials(tokens);
     const drive = google.drive({ version: "v3", auth: oauth2Client });
-
-    const fileMetadata = { name: `link-${Date.now()}.txt` };
-    const media = { mimeType: "text/plain", body: link };
-
-    const created = await drive.files.create({
-      requestBody: fileMetadata,
-      media,
-      fields: "id,webViewLink"
+    const response = await drive.files.list({
+      pageSize: 10,
+      fields: "files(id, name, mimeType, webViewLink)"
     });
 
-    return res.json({ success: true, file: created.data });
-  } catch (err) {
-    console.error("Drive submit error:", err);
-    return res.status(500).json({ success: false, message: "Drive API error" });
+    res.json(response.data.files);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
   }
 });
 
